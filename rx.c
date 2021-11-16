@@ -15,6 +15,8 @@
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  *
+ * 2021-09-11   Tim Curtis <tim@moodeaudio.org>
+ * - Modifications and enhancements to support integration into moOde audio player
  */
 
 #include <netdb.h>
@@ -74,20 +76,23 @@ static RtpSession* create_rtp_recv(const char *addr_desc, const int port,
 
 static int play_one_frame(void *packet,
 		size_t len,
+		const snd_pcm_sframes_t frame,
 		OpusDecoder *decoder,
 		snd_pcm_t *snd,
 		const unsigned int channels)
 {
 	int r;
 	int16_t *pcm;
-	snd_pcm_sframes_t f, samples = 1920;
+	/* NOTE: For moOde implementation samples (frame_size) is a command line arg with default of DEFAULT_FRAME */
+	/*snd_pcm_sframes_t f, samples = 1920;*/
+	snd_pcm_sframes_t f;
 
-	pcm = alloca(sizeof(*pcm) * samples * channels);
+	pcm = alloca(sizeof(*pcm) * frame * channels);
 
 	if (packet == NULL) {
-		r = opus_decode(decoder, NULL, 0, pcm, samples, 1);
+		r = opus_decode(decoder, NULL, 0, pcm, frame, 1);
 	} else {
-		r = opus_decode(decoder, packet, len, pcm, samples, 0);
+		r = opus_decode(decoder, packet, len, pcm, frame, 0);
 	}
 	if (r < 0) {
 		fprintf(stderr, "opus_decode: %s\n", opus_strerror(r));
@@ -112,6 +117,7 @@ static int play_one_frame(void *packet,
 static int run_rx(RtpSession *session,
 		OpusDecoder *decoder,
 		snd_pcm_t *snd,
+		const unsigned int frame,
 		const unsigned int channels,
 		const unsigned int rate)
 {
@@ -119,7 +125,7 @@ static int run_rx(RtpSession *session,
 
 	for (;;) {
 		int r, have_more;
-		char buf[32768];
+		char buf[65536]; /* Was 32768 */
 		void *packet;
 
 		r = rtp_session_recv_with_ts(session, (uint8_t*)buf,
@@ -136,7 +142,7 @@ static int run_rx(RtpSession *session,
 				fputc('.', stderr);
 		}
 
-		r = play_one_frame(packet, r, decoder, snd, channels);
+		r = play_one_frame(packet, r, frame, decoder, snd, channels);
 		if (r == -1)
 			return -1;
 
@@ -166,15 +172,24 @@ static void usage(FILE *fd)
 		DEFAULT_JITTER);
 
 	fprintf(fd, "\nEncoding parameters (must match sender):\n");
-	fprintf(fd, "  -r <rate>   Sample rate (default %dHz)\n",
+	fprintf(fd, "  -r <rate>   Sample rate (default %d Hz)\n",
 		DEFAULT_RATE);
 	fprintf(fd, "  -c <n>      Number of channels (default %d)\n",
 		DEFAULT_CHANNELS);
+	fprintf(fd, "  -f <n>      Frame size (default %d samples, see (1) below)\n",
+		DEFAULT_FRAME);
 
 	fprintf(fd, "\nProgram parameters:\n");
 	fprintf(fd, "  -v <n>      Verbosity level (default %d)\n",
 		DEFAULT_VERBOSE);
 	fprintf(fd, "  -D <file>   Run as a daemon, writing process ID to the given file\n");
+	fprintf(fd, "  -R <prio>   Realtime priority (default %d)\n",
+		DEFAULT_RTPRIO);
+	fprintf(fd, "  -H          Print program help\n");
+
+	fprintf(fd, "\n(1) Allowed frame sizes (-f) are defined by the Opus codec. For example,\n"
+		"at 48000 Hz the permitted values are 120, 240, 480, 960, 1920 or 2880 which\n"
+		"correspond to 2.5, 7.5, 10, 20, 40 or 60 milliseconds respectively.\n");
 }
 
 int main(int argc, char *argv[])
@@ -190,24 +205,30 @@ int main(int argc, char *argv[])
 		*pid = NULL;
 	unsigned int buffer = DEFAULT_BUFFER,
 		rate = DEFAULT_RATE,
+		frame = DEFAULT_FRAME,
 		jitter = DEFAULT_JITTER,
 		channels = DEFAULT_CHANNELS,
-		port = DEFAULT_PORT;
+		port = DEFAULT_PORT,
+		rtprio = DEFAULT_RTPRIO;
 
-	fputs(COPYRIGHT "\n", stderr);
+	fputs(VERSION "\n" COPYRIGHT "\n\n", stderr);
 
 	for (;;) {
 		int c;
 
-		c = getopt(argc, argv, "c:d:h:j:m:p:r:v:");
+		c = getopt(argc, argv, "c:d:f:h:j:m:p:r:v:D:R:H");
 		if (c == -1)
 			break;
+
 		switch (c) {
 		case 'c':
 			channels = atoi(optarg);
 			break;
 		case 'd':
 			device = optarg;
+			break;
+		case 'f':
+			frame = atol(optarg);
 			break;
 		case 'h':
 			addr = optarg;
@@ -230,10 +251,22 @@ int main(int argc, char *argv[])
 		case 'D':
 			pid = optarg;
 			break;
+		case 'R':
+			rtprio = atoi(optarg);
+			break;
+		case 'H':
+			usage(stderr);
+			return -1;
 		default:
 			usage(stderr);
 			return -1;
 		}
+	}
+
+	/* No options present on cmd line */
+	if (optind == 1) {
+		usage(stderr);
+		return -1;
 	}
 
 	decoder = opus_decoder_create(rate, channels, &error);
@@ -261,8 +294,8 @@ int main(int argc, char *argv[])
 	if (pid)
 		go_daemon(pid);
 
-	go_realtime();
-	r = run_rx(session, decoder, snd, channels, rate);
+	go_realtime(rtprio);
+	r = run_rx(session, decoder, snd, frame, channels, rate);
 
 	if (snd_pcm_close(snd) < 0)
 		abort();

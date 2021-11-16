@@ -15,6 +15,8 @@
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  *
+ * 2021-09-11   Tim Curtis <tim@moodeaudio.org>
+ * - Modifications and enhancements to support integration into moOde audio player
  */
 
 #include <netdb.h>
@@ -145,11 +147,11 @@ static void usage(FILE *fd)
 		DEFAULT_PORT);
 
 	fprintf(fd, "\nEncoding parameters:\n");
-	fprintf(fd, "  -r <rate>   Sample rate (default %dHz)\n",
+	fprintf(fd, "  -r <rate>   Sample rate (default %d Hz, see (1) below.)\n",
 		DEFAULT_RATE);
 	fprintf(fd, "  -c <n>      Number of channels (default %d)\n",
 		DEFAULT_CHANNELS);
-	fprintf(fd, "  -f <n>      Frame size (default %d samples, see below)\n",
+	fprintf(fd, "  -f <n>      Frame size (default %d samples, see (2) below)\n",
 		DEFAULT_FRAME);
 	fprintf(fd, "  -b <kbps>   Bitrate (approx., default %d)\n",
 		DEFAULT_BITRATE);
@@ -158,9 +160,15 @@ static void usage(FILE *fd)
 	fprintf(fd, "  -v <n>      Verbosity level (default %d)\n",
 		DEFAULT_VERBOSE);
 	fprintf(fd, "  -D <file>   Run as a daemon, writing process ID to the given file\n");
+	fprintf(fd, "  -R <prio>   Realtime priority (default %d)\n",
+		DEFAULT_RTPRIO);
+	fprintf(fd, "  -H          Print program help\n");
 
-	fprintf(fd, "\nAllowed frame sizes (-f) are defined by the Opus codec. For example,\n"
-		"at 48000Hz the permitted values are 120, 240, 480 or 960.\n");
+	fprintf(fd, "\n(1) Sampling rate (-r) of the input signal (Hz) This must be one\n"
+	 	"of 8000, 12000, 16000, 24000, or 48000.\n"
+		"\n(2) Allowed frame sizes (-f) are defined by the Opus codec. For example,\n"
+		"at 48000 Hz the permitted values are 120, 240, 480, 960, 1920 or 2880 which\n"
+		"correspond to 2.5, 7.5, 10, 20, 40 or 60 milliseconds respectively.\n");
 }
 
 int main(int argc, char *argv[])
@@ -181,14 +189,15 @@ int main(int argc, char *argv[])
 		channels = DEFAULT_CHANNELS,
 		frame = DEFAULT_FRAME,
 		kbps = DEFAULT_BITRATE,
-		port = DEFAULT_PORT;
+		port = DEFAULT_PORT,
+		rtprio = DEFAULT_RTPRIO;
 
-	fputs(COPYRIGHT "\n", stderr);
+	fputs(VERSION "\n" COPYRIGHT "\n\n", stderr);
 
 	for (;;) {
 		int c;
 
-		c = getopt(argc, argv, "b:c:d:f:h:m:p:r:v:D:");
+		c = getopt(argc, argv, "b:c:d:f:h:m:p:r:v:D:R:H");
 		if (c == -1)
 			break;
 
@@ -223,10 +232,22 @@ int main(int argc, char *argv[])
 		case 'D':
 			pid = optarg;
 			break;
+		case 'R':
+			rtprio = atoi(optarg);
+			break;
+		case 'H':
+			usage(stderr);
+			return -1;
 		default:
 			usage(stderr);
 			return -1;
 		}
+	}
+
+	/* No options present on cmd line */
+	if (optind == 1) {
+		usage(stderr);
+		return -1;
 	}
 
 	encoder = opus_encoder_create(rate, channels, OPUS_APPLICATION_AUDIO,
@@ -245,6 +266,7 @@ int main(int argc, char *argv[])
 
 	ortp_init();
 	ortp_scheduler_init();
+	ortp_set_log_level_mask(NULL, ORTP_WARNING|ORTP_ERROR);
 	session = create_rtp_send(addr, port);
 	assert(session != NULL);
 
@@ -261,7 +283,7 @@ int main(int argc, char *argv[])
 	if (pid)
 		go_daemon(pid);
 
-	go_realtime();
+	go_realtime(rtprio);
 	r = run_tx(snd, channels, frame, encoder, bytes_per_frame,
 		ts_per_frame, session);
 

@@ -15,12 +15,17 @@
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  *
+ * 2021-09-11   Tim Curtis <tim@moodeaudio.org>
+ * - Define default priority
+ * - Pass argv priority in go_realtime()
  */
 
 #ifndef MISC_H
 #define MISC_H
 
-int go_realtime(void);
+#define DEFAULT_RTPRIO 45
+
+int go_realtime(const unsigned int rtprio);
 int go_daemon(const char *pid_file);
 
 #endif

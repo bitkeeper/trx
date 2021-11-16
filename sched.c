@@ -15,6 +15,8 @@
  * Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  *
+ * 2021-09-11   Tim Curtis <tim@moodeaudio.org>
+ * - Accept argv priority in go_realtime()
  */
 
 #include <sched.h>
@@ -23,9 +25,7 @@
 
 #include "sched.h"
 
-#define REALTIME_PRIORITY 80
-
-int go_realtime(void)
+int go_realtime(const unsigned int rtprio)
 {
 	int max_pri;
 	struct sched_param sp;
@@ -36,7 +36,7 @@ int go_realtime(void)
 	}
 
 	max_pri = sched_get_priority_max(SCHED_FIFO);
-	sp.sched_priority = REALTIME_PRIORITY;
+	sp.sched_priority = rtprio;
 
 	if (sp.sched_priority > max_pri) {
 		fprintf(stderr, "Invalid priority (maximum %d)\n", max_pri);
